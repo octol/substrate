@@ -653,9 +653,14 @@ bitmask! {
 	}
 }
 
+/// A trait to query the time of the current block.
 pub trait Time {
+	/// Type used for expressing timestamp.
 	type Moment: SimpleArithmetic + Parameter + Default + Copy;
 
+	/// Return the last timestamp set by inherent. If called before the inherent providing
+	/// timestamp for the current block (i.e. in-between blocks, in on_initialize, or in previous
+	/// inherents) then the moment of the previous block is returned or 0 for the first block.
 	fn now() -> Self::Moment;
 }
 

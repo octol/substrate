@@ -230,7 +230,6 @@ impl<T: Trait> ProvideInherent for Module<T> {
 impl<T: Trait> Time for Module<T> {
 	type Moment = T::Moment;
 
-	/// Before the first set of now with inherent the value returned is zero.
 	fn now() -> Self::Moment {
 		Self::now()
 	}
