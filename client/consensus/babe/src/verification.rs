@@ -93,7 +93,7 @@ pub(super) fn check_header<B: BlockT + Sized>(
 	};
 
 	match &pre_digest {
-		BabePreDigest::Primary { vrf_output, vrf_proof, authority_index, slot_number } => {
+		BabePreDigest::Primary { vrf_output, vrf_proof, authority_index, slot_number, .. } => {
 			debug!(target: "babe", "Verifying Primary block");
 
 			let digest = (vrf_output, vrf_proof, *authority_index, *slot_number);

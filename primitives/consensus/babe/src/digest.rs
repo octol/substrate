@@ -44,6 +44,8 @@ use sp_std::vec::Vec;
 pub enum BabePreDigest {
 	/// A primary VRF-based slot assignment.
 	Primary {
+		/// epoch threshold
+		threshold: Option<u128>,
 		/// VRF output
 		vrf_output: VRFOutput,
 		/// VRF proof
@@ -142,6 +144,7 @@ impl Encode for BabePreDigest {
 				vrf_proof,
 				authority_index,
 				slot_number,
+				..
 			} => {
 				RawBabePreDigest::Primary {
 					vrf_output: *vrf_output.as_bytes(),
@@ -182,6 +185,7 @@ impl Decode for BabePreDigest {
 					vrf_output: VRFOutput::from_bytes(&vrf_output).map_err(convert_error)?,
 					authority_index,
 					slot_number,
+					threshold: None,
 				}
 			},
 			RawBabePreDigest::Secondary { authority_index, slot_number } => {

@@ -197,6 +197,7 @@ fn claim_primary_slot(
 			.vrf_sign_after_check(transcript, |inout| super::authorship::check_primary_threshold(inout, threshold))
 			.map(|s| {
 				BabePreDigest::Primary {
+					threshold: Some(threshold),
 					slot_number,
 					vrf_output: s.0.to_output(),
 					vrf_proof: s.1,

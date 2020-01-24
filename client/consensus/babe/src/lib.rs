@@ -114,6 +114,7 @@ mod aux_schema;
 mod verification;
 mod epoch_changes;
 mod authorship;
+mod rpc;
 #[cfg(test)]
 mod tests;
 pub use sp_consensus_babe::{
