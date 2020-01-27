@@ -29,7 +29,7 @@ use futures::{
 use serde::{Deserialize, Serialize};
 use sp_runtime::{
 	generic::BlockId,
-	traits::{Block as BlockT, Member},
+	traits::{Block as BlockT, Member, BlockHashFor},
 	transaction_validity::{
 		TransactionLongevity, TransactionPriority, TransactionTag,
 	},
@@ -90,7 +90,7 @@ impl PoolStatus {
 /// However the user needs to re-subscribe to receive such notifications.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum TransactionStatus<Hash, BlockHash> {
+pub enum TransactionStatus<Hash, Block: BlockT> {
 	/// Transaction is part of the future queue.
 	Future,
 	/// Transaction is part of the ready queue.
@@ -99,7 +99,9 @@ pub enum TransactionStatus<Hash, BlockHash> {
 	Broadcast(Vec<String>),
 	/// Transaction has been included in block with given hash.
 	#[serde(rename = "finalized")] // See #4438
-	InBlock(BlockHash),
+	InBlock(BlockHashFor<Block>),
+	/// Transaction has been finalized by a finality-gadget, e.g GRANDPA
+	Finalized,
 	/// Transaction has been replaced in the pool, by another transaction
 	/// that provides the same tags. (e.g. same (sender, nonce)).
 	Usurped(Hash),
@@ -110,7 +112,7 @@ pub enum TransactionStatus<Hash, BlockHash> {
 }
 
 /// The stream of transaction events.
-pub type TransactionStatusStream<Hash, BlockHash> = dyn Stream<Item=TransactionStatus<Hash, BlockHash>> + Send + Unpin;
+pub type TransactionStatusStream<Hash, Block> = dyn Stream<Item=TransactionStatus<Hash, Block>> + Send + Unpin;
 
 /// The import notification event stream.
 pub type ImportNotificationStream = mpsc::UnboundedReceiver<()>;
@@ -122,7 +124,7 @@ pub type BlockHash<P> = <<P as TransactionPool>::Block as BlockT>::Hash;
 /// Transaction type for a pool.
 pub type TransactionFor<P> = <<P as TransactionPool>::Block as BlockT>::Extrinsic;
 /// Type of transactions event stream for a pool.
-pub type TransactionStatusStreamFor<P> = TransactionStatusStream<TxHash<P>, BlockHash<P>>;
+pub type TransactionStatusStreamFor<P, B> = TransactionStatusStream<TxHash<P>, B>;
 
 /// Typical future type used in transaction pool api.
 pub type PoolFuture<T, E> = std::pin::Pin<Box<dyn Future<Output=Result<T, E>> + Send>>;
@@ -189,7 +191,7 @@ pub trait TransactionPool: Send + Sync {
 		&self,
 		at: &BlockId<Self::Block>,
 		xt: TransactionFor<Self>,
-	) -> PoolFuture<Box<TransactionStatusStreamFor<Self>>, Self::Error>;
+	) -> PoolFuture<Box<TransactionStatusStreamFor<Self, Self::Block>>, Self::Error>;
 
 	// *** Block production / Networking
 	/// Get an iterator for ready transactions ordered by priority

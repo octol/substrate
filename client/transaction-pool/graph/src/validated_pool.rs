@@ -16,10 +16,10 @@
 
 use std::{
 	collections::{HashSet, HashMap},
-	fmt,
 	hash,
 	sync::Arc,
 	time,
+	marker::Unpin,
 };
 
 use crate::base_pool as base;
@@ -29,17 +29,20 @@ use crate::watcher::Watcher;
 use serde::Serialize;
 use log::{debug, warn};
 
-use futures::channel::mpsc;
+use futures::{
+	channel::mpsc,
+	stream::Stream,
+};
 use parking_lot::{Mutex, RwLock};
 use sp_runtime::{
 	generic::BlockId,
-	traits::{self, SaturatedConversion},
+	traits::{self, SaturatedConversion, Block as BlockT},
 	transaction_validity::TransactionTag as Tag,
 };
 use sp_transaction_pool::{error, PoolStatus};
 
 use crate::base_pool::PruneStatus;
-use crate::pool::{EventStream, Options, ChainApi, BlockHash, ExHash, ExtrinsicFor, TransactionFor};
+use crate::pool::{EventStream, Options, ChainApi, ExHash, ExtrinsicFor, TransactionFor, BlockFor};
 
 /// Pre-validated transaction. Validated pool only accepts transactions wrapped in this enum.
 #[derive(Debug)]
@@ -65,7 +68,7 @@ pub type ValidatedTransactionFor<B> = ValidatedTransaction<
 pub(crate) struct ValidatedPool<B: ChainApi> {
 	api: Arc<B>,
 	options: Options,
-	listener: RwLock<Listener<ExHash<B>, BlockHash<B>>>,
+	listener: RwLock<Listener<ExHash<B>, B>>,
 	pool: RwLock<base::BasePool<
 		ExHash<B>,
 		ExtrinsicFor<B>,
@@ -178,7 +181,7 @@ impl<B: ChainApi> ValidatedPool<B> {
 	pub fn submit_and_watch(
 		&self,
 		tx: ValidatedTransactionFor<B>,
-	) -> Result<Watcher<ExHash<B>, BlockHash<B>>, B::Error> {
+	) -> Result<Watcher<ExHash<B>, BlockFor<B>>, B::Error> {
 		match tx {
 			ValidatedTransaction::Valid(tx) => {
 				let hash = self.api.hash_and_length(&tx.data).0;
@@ -496,14 +499,22 @@ impl<B: ChainApi> ValidatedPool<B> {
 	pub fn status(&self) -> PoolStatus {
 		self.pool.read().status()
 	}
+
+	/// Register a stream of notifications from the finality provider.
+	pub fn register_finality_notifications(
+		&self,
+		finality_notifications: impl Stream<Item = <BlockFor<B> as BlockT>::Header> + Unpin + Send + 'static,
+	) {
+		self.listener.write().register_finality_notifications(finality_notifications, self.api.clone());
+	}
 }
 
-fn fire_events<H, H2, Ex>(
-	listener: &mut Listener<H, H2>,
+fn fire_events<H, B, Ex>(
+	listener: &mut Listener<H, B>,
 	imported: &base::Imported<H, Ex>,
 ) where
 	H: hash::Hash + Eq + traits::Member + Serialize,
-	H2: Clone + fmt::Debug,
+	B: ChainApi,
 {
 	match *imported {
 		base::Imported::Ready { ref promoted, ref failed, ref removed, ref hash } => {

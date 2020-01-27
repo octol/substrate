@@ -158,7 +158,7 @@ impl<PoolApi, Block> TransactionPool for BasicPool<PoolApi, Block>
 		&self,
 		at: &BlockId<Self::Block>,
 		xt: TransactionFor<Self>,
-	) -> PoolResult<Box<TransactionStatusStreamFor<Self>>> {
+	) -> PoolResult<Box<TransactionStatusStreamFor<Self, Self::Block>>> {
 		let at = *at;
 		let pool = self.pool.clone();
 

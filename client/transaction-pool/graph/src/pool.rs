@@ -26,11 +26,12 @@ use serde::Serialize;
 
 use futures::{
 	Future, FutureExt,
+	Stream,
 	channel::mpsc,
 };
 use sp_runtime::{
 	generic::BlockId,
-	traits::{self, SaturatedConversion},
+	traits::{self, SaturatedConversion, Block as BlockT},
 	transaction_validity::{TransactionValidity, TransactionTag as Tag, TransactionValidityError},
 };
 use sp_transaction_pool::{error, PoolStatus};
@@ -48,6 +49,8 @@ pub type BlockHash<A> = <<A as ChainApi>::Block as traits::Block>::Hash;
 pub type ExtrinsicFor<A> = <<A as ChainApi>::Block as traits::Block>::Extrinsic;
 /// Block number type for the ChainApi
 pub type NumberFor<A> = traits::NumberFor<<A as ChainApi>::Block>;
+/// Block type for the ChainApi
+pub type BlockFor<A> = <A as ChainApi>::Block;
 /// A type of transaction stored in the pool
 pub type TransactionFor<A> = Arc<base::Transaction<ExHash<A>, ExtrinsicFor<A>>>;
 /// A type of validated transaction stored in the pool.
@@ -164,7 +167,7 @@ impl<B: ChainApi> Pool<B> {
 		&self,
 		at: &BlockId<B::Block>,
 		xt: ExtrinsicFor<B>,
-	) -> Result<Watcher<ExHash<B>, BlockHash<B>>, B::Error> {
+	) -> Result<Watcher<ExHash<B>, <B as ChainApi>::Block>, B::Error> {
 		let block_number = self.resolve_block_number(at)?;
 		let (_, tx) = self.verify_one(at, block_number, xt, false).await;
 		self.validated_pool.submit_and_watch(tx)
@@ -436,6 +439,14 @@ impl<B: ChainApi> Pool<B> {
 		};
 
 		(hash, validity)
+	}
+
+	/// Register a stream of notifications from the finality provider.
+	pub fn register_finality_notifications(
+		&self,
+		finality_notifications: impl Stream<Item = <BlockFor<B> as BlockT>::Header> + Unpin + Send + 'static,
+	) {
+		self.validated_pool.register_finality_notifications(finality_notifications);
 	}
 }
 
