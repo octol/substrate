@@ -366,6 +366,8 @@ decl_event!(
 		ExtrinsicSuccess(DispatchInfo),
 		/// An extrinsic failed.
 		ExtrinsicFailed(DispatchError, DispatchInfo),
+		/// An extrinsic failed. [development version]
+		ExtrinsicFailedDev(Vec<u8>, DispatchInfo),
 		/// `:code` was updated.
 		CodeUpdated,
 	}
@@ -852,7 +854,14 @@ impl<T: Trait> Module<T> {
 		Self::deposit_event(
 			match r {
 				Ok(()) => Event::ExtrinsicSuccess(info),
-				Err(err) => Event::ExtrinsicFailed(err.clone(), info),
+				Err(err) => {
+					if false /* is_dev */ {
+						let msg: &'static str = err.clone().into();
+						Event::ExtrinsicFailedDev(msg.as_bytes().to_vec(), info)
+					} else {
+						Event::ExtrinsicFailed(err.clone(), info)
+					}
+				},
 			}
 		);
 
