@@ -16,16 +16,19 @@
 
 //! rpc api for babe.
 
-use err_derive::*;
-use futures::prelude::*;
+use futures::{
+	prelude::*,
+	executor::ThreadPool,
+	channel::oneshot,
+	future,
+};
 use jsonrpc_core::BoxFuture;
 use jsonrpc_derive::rpc;
-use schnorrkel::vrf::{VRFProof, VRFOutput};
 use sp_consensus_babe::{AuthorityId, Epoch, AuthorityIndex, BabePreDigest};
 use crate::{SharedEpochChanges, authorship, epoch_changes::descendent_query, Config};
 use sc_keystore::KeyStorePtr;
 use std::sync::Arc;
-use sp_core::crypto::Pair;
+use sp_core::{crypto::Pair, Bytes};
 use sp_runtime::traits::{Block as BlockT, Header as _};
 use sp_consensus::{SelectChain, Error as ConsensusError};
 use sp_blockchain::{HeaderBackend, HeaderMetadata, Error as BlockChainError};
@@ -44,60 +47,74 @@ pub trait Babe {
 /// provides `babe_epochAuthorship` method for querying slot authorship data.
 struct BabeRPC<B: BlockT, C> {
 	client: Arc<C>,
-	epoch_data: SharedEpochChanges<B>,
+	shared_epoch_changes: SharedEpochChanges<B>,
 	keystore: KeyStorePtr,
 	babe_config: Config,
+	threadpool: ThreadPool,
 }
 
-impl<B, C> BabeRPC<B, C>
-	where
-		B: BlockT,
-		C: SelectChain<B> + HeaderBackend<B> + HeaderMetadata<B, Error = BlockChainError> + 'static
-{
-	fn epoch_data(&self, ) -> Result<Epoch, ConsensusError> {
-		let parent = self.client.best_chain()?;
-		self.epoch_data.lock().epoch_for_child_of(
-			descendent_query(&*self.client),
-			&parent.hash(),
-			parent.number().clone(),
-			// FIXME: what slot_number goes here?
-			0,
-			|slot| self.babe_config.genesis_epoch(slot)
-		)
-			.map_err(|e| ConsensusError::ChainLookup(format!("{:?}", e)))?
-			.map(|e| e.into_inner())
-			.ok_or(ConsensusError::InvalidAuthoritiesSet)
+impl<B: BlockT, C> BabeRPC<B, C> {
+	pub fn new(
+		client: Arc<C>,
+		shared_epoch_changes: SharedEpochChanges<B>,
+		keystore: KeyStorePtr,
+		babe_config: Config
+	) -> Self {
+		let threadpool = ThreadPool::builder().pool_size(1).create().unwrap();
+		Self {
+			client,
+			shared_epoch_changes,
+			keystore,
+			babe_config,
+			threadpool,
+		}
 	}
 }
 
 impl<B, C> Babe for BabeRPC<B, C>
 	where
 		B: BlockT,
-		C: SelectChain<B> + HeaderBackend<B> + HeaderMetadata<B, Error = BlockChainError> + 'static,
+		C: SelectChain<B> + HeaderBackend<B> + HeaderMetadata<B, Error=BlockChainError> + 'static,
 {
 	fn epoch_authorship(&self) -> BoxFuture<Vec<SlotAuthorship>> {
-		// FIXME: spawn this heavy work on a threadpool and use a oneshot?
-		// epoch data will be used to calculate slot information as well as claims
-		let epoch_data = self.epoch_data().map_err(Error::Consensus);
-		let (babe_config, keystore) = (self.babe_config.clone(), self.keystore.clone());
+		let (
+			babe_config,
+			keystore,
+			shared_epoch,
+			client,
+		) = (
+			self.babe_config.clone(),
+			self.keystore.clone(),
+			self.shared_epoch_changes.clone(),
+			self.client.clone(),
+		);
+
+		// FIXME: get currrent slot_number from runtime.
+		let epoch = epoch_data(&shared_epoch, &client, &babe_config, slot_number)
+			.map_err(Error::Consensus);
+
+		let (tx, rx) = oneshot::channel();
+
 		let future = async move {
-			let epoch_data = epoch_data?;
-			let (epoch_start, epoch_end) = (epoch_data.start_slot, epoch_data.end_slot());
+			let epoch = epoch?;
+			let (epoch_start, epoch_end) = (epoch.start_slot, epoch.end_slot());
 			let mut slots = vec![];
 
-			for slot_number in epoch_start..epoch_end {
-				let slot = authorship::claim_slot(slot_number, &epoch_data, &babe_config, &keystore);
+			for slot_number in epoch_start..=epoch_end {
+				let epoch = epoch_data(&shared_epoch, &client, &babe_config, slot_number)
+					.map_err(Error::Consensus)?;
+				let slot = authorship::claim_slot(slot_number, &epoch, &babe_config, &keystore);
 				if let Some((claim, key)) = slot {
 					let claim = match claim {
 						BabePreDigest::Primary { vrf_output, vrf_proof, threshold, .. } => {
 							let threshold = threshold.expect("threshold is set in the call to claim_slot; qed");
 							BabeClaim::Primary {
 								threshold,
-								output: vrf_output,
-								proof: vrf_proof,
+								output: Bytes(vrf_output.as_bytes().to_vec()),
+								proof: Bytes(vrf_proof.to_bytes().to_vec()),
 								key: key.public(),
 							}
-						},
+						}
 						BabePreDigest::Secondary { authority_index, .. } => {
 							BabeClaim::Secondary {
 								authority_index
@@ -113,9 +130,16 @@ impl<B, C> Babe for BabeRPC<B, C>
 			}
 
 			Ok(slots)
-		}.boxed();
+		}.then(|result| {
+			let _ = tx.send(result).expect("receiever is never dropped; qed");
+			future::ready(())
+		}).boxed();
 
-		Box::new(future.compat())
+		self.threadpool.spawn_ok(future);
+
+		Box::new(async {
+			rx.await.expect("sender is never dropped; qed")
+		}.boxed().compat())
 	}
 }
 
@@ -138,20 +162,20 @@ enum BabeClaim {
 		/// key that makes this claim
 		key: AuthorityId,
 		/// Vrf output
-		output: VRFOutput,
+		output: Bytes,
 		/// Vrf proof
-		proof: VRFProof,
+		proof: Bytes,
 	},
 	/// a secondary claim for a given slot
 	Secondary {
 		authority_index: AuthorityIndex,
-	}
+	},
 }
 
-#[derive(Error, derive_more::Display, derive_more::From)]
-enum Error {
-	#[display(fmt = "Consensus Error: {}", _0)]
-	Consensus(ConsensusError)
+#[derive(Debug, err_derive::Error)]
+pub enum Error {
+	#[error(display = "Consensus Error: {}", _0)]
+	Consensus(ConsensusError),
 }
 
 impl From<Error> for jsonrpc_core::Error {
@@ -159,7 +183,30 @@ impl From<Error> for jsonrpc_core::Error {
 		jsonrpc_core::Error {
 			message: format!("{}", error).into(),
 			code: jsonrpc_core::ErrorCode::ServerError(1234),
-			data: None
+			data: None,
 		}
 	}
+}
+
+fn epoch_data<B, C>(
+	epoch_changes: &SharedEpochChanges<B>,
+	client: &Arc<C>,
+	babe_config: &Config,
+	slot_number: u64,
+) -> Result<Epoch, ConsensusError>
+	where
+		B: BlockT,
+		C: SelectChain<B> + HeaderBackend<B> + HeaderMetadata<B, Error=BlockChainError> + 'static,
+{
+	let parent = client.best_chain()?;
+	epoch_changes.lock().epoch_for_child_of(
+		descendent_query(&**client),
+		&parent.hash(),
+		parent.number().clone(),
+		slot_number,
+		|slot| babe_config.genesis_epoch(slot),
+	)
+		.map_err(|e| ConsensusError::ChainLookup(format!("{:?}", e)))?
+		.map(|e| e.into_inner())
+		.ok_or(ConsensusError::InvalidAuthoritiesSet)
 }
