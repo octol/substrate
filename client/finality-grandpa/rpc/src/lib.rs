@@ -16,7 +16,7 @@
 
 //! RPC API for GRANDPA.
 
-use futures::{FutureExt as _, TryFutureExt as _};
+use futures::{FutureExt as _, TryFutureExt as _, channel::mpsc};
 use jsonrpc_derive::rpc;
 use jsonrpc_core::{Error as RpcError, futures::future as rpc_future};
 
@@ -28,10 +28,23 @@ pub trait GrandpaApi {
 	fn grandpa_roundState(&self) -> FutureResult<String>;
 }
 
-pub struct GrandpaRpcHandler;
+pub struct GrandpaRpcHandler {
+	voter_state_rx: mpsc::UnboundedReceiver<i32>,
+}
+
+impl GrandpaRpcHandler {
+	pub fn new(
+		voter_state_rx: mpsc::UnboundedReceiver<i32>,
+	) -> Self {
+		Self {
+			voter_state_rx,
+		}
+	}
+}
 
 impl GrandpaApi for GrandpaRpcHandler {
 	fn grandpa_roundState(&self) -> FutureResult<String> {
+		// TODO: figure out best way to deal with `voter_state_rx`.
 		let future = async move {
 			Ok(String::from("Hello world"))
 		}.boxed();
@@ -56,7 +69,8 @@ mod tests {
 		let client = builder.build();
 		let client = Arc::new(client);
 
-		let handler = GrandpaRpcHandler {};
+		let (voter_state_tx, voter_state_rx) = mpsc::unbounded();
+		let handler = GrandpaRpcHandler::new(voter_state_rx);
 		let mut io = IoHandler::new();
 		io.extend_with(GrandpaApi::to_delegate(handler));
 

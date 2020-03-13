@@ -53,9 +53,8 @@
 //! included in the newly-finalized chain.
 
 use futures::prelude::*;
-use futures::StreamExt;
+use futures::{StreamExt, channel::mpsc};
 use log::{debug, info};
-use futures::channel::mpsc;
 use sc_client_api::{BlockchainEvents, CallExecutor, backend::{AuxStore, Backend}, ExecutionStrategy};
 use sp_blockchain::{HeaderBackend, Error as ClientError};
 use sc_client::Client;
@@ -397,7 +396,7 @@ pub fn block_import<B, E, Block: BlockT, RA, SC>(
 	select_chain: SC,
 ) -> Result<(
 		GrandpaBlockImport<B, E, Block, RA, SC>,
-		LinkHalf<B, E, Block, RA, SC>
+		LinkHalf<B, E, Block, RA, SC>,
 	), ClientError>
 where
 	B: Backend<Block> + 'static,
@@ -531,6 +530,8 @@ pub struct GrandpaParams<B, E, Block: BlockT, N, RA, SC, VR, X> {
 	pub telemetry_on_connect: Option<futures::channel::mpsc::UnboundedReceiver<()>>,
 	/// A voting rule used to potentially restrict target votes.
 	pub voting_rule: VR,
+	/// Channel to send the updated VoterState everytime we reconstruct the Voter
+	pub voter_state_tx: Option<futures::channel::mpsc::UnboundedSender<i32>>,
 }
 
 /// Run a GRANDPA voter as a task. Provide configuration and a link to a
@@ -558,6 +559,7 @@ pub fn run_grandpa_voter<B, E, Block: BlockT, N, RA, SC, VR, X>(
 		on_exit,
 		telemetry_on_connect,
 		voting_rule,
+		voter_state_tx,
 	} = grandpa_params;
 
 	let LinkHalf {
@@ -610,6 +612,7 @@ pub fn run_grandpa_voter<B, E, Block: BlockT, N, RA, SC, VR, X>(
 		voting_rule,
 		persistent_data,
 		voter_commands_rx,
+		voter_state_tx,
 	);
 
 	let voter_work = voter_work
@@ -628,6 +631,7 @@ struct VoterWork<B, E, Block: BlockT, N: NetworkT<Block>, RA, SC, VR> {
 	voter: Pin<Box<dyn Future<Output = Result<(), CommandOrError<Block::Hash, NumberFor<Block>>>> + Send>>,
 	env: Arc<Environment<B, E, Block, N, RA, SC, VR>>,
 	voter_commands_rx: mpsc::UnboundedReceiver<VoterCommand<Block::Hash, NumberFor<Block>>>,
+	voter_state_tx: Option<mpsc::UnboundedSender<i32>>,
 	network: NetworkBridge<Block, N>,
 }
 
@@ -651,6 +655,7 @@ where
 		voting_rule: VR,
 		persistent_data: PersistentData<Block>,
 		voter_commands_rx: mpsc::UnboundedReceiver<VoterCommand<Block::Hash, NumberFor<Block>>>,
+		voter_state_tx: Option<mpsc::UnboundedSender<i32>>,
 	) -> Self {
 
 		let voters = persistent_data.authority_set.current_authorities();
@@ -673,6 +678,7 @@ where
 			voter: Box::pin(future::pending()),
 			env,
 			voter_commands_rx,
+			voter_state_tx,
 			network,
 		};
 		work.rebuild_voter();
@@ -735,6 +741,11 @@ where
 					last_completed_round.base.clone(),
 					last_finalized,
 				);
+
+				// WIP: send Voter::voter_state()
+				if let Some(vs) = &mut self.voter_state_tx {
+					vs.send(42);
+				}
 
 				self.voter = Box::pin(voter);
 			},

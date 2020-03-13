@@ -3497,6 +3497,7 @@ dependencies = [
 name = "node-rpc"
 version = "2.0.0"
 dependencies = [
+ "futures 0.3.4",
  "jsonrpc-core",
  "node-primitives",
  "node-runtime",

@@ -31,6 +31,8 @@
 
 use std::{sync::Arc, fmt};
 
+use futures::channel::mpsc;
+
 use node_primitives::{Block, BlockNumber, AccountId, Index, Balance};
 use node_runtime::UncheckedExtrinsic;
 use sp_api::ProvideRuntimeApi;
@@ -76,6 +78,8 @@ pub struct FullDeps<C, P, SC> {
 	pub select_chain: SC,
 	/// BABE specific dependencies.
 	pub babe: BabeDeps,
+	/// Channel to receive new VoterState instances.
+	pub voter_state_rx: mpsc::UnboundedReceiver<i32>,
 }
 
 /// Instantiate all Full RPC extensions.
@@ -103,7 +107,8 @@ pub fn create_full<C, P, M, SC>(
 		client,
 		pool,
 		select_chain,
-		babe
+		babe,
+		voter_state_rx,
 	} = deps;
 	let BabeDeps {
 		keystore,
@@ -130,7 +135,7 @@ pub fn create_full<C, P, M, SC>(
 	);
 	io.extend_with(
 		sc_finality_grandpa_rpc::GrandpaApi::to_delegate(
-			GrandpaRpcHandler {}
+			GrandpaRpcHandler::new(voter_state_rx)
 		)
 	);
 
