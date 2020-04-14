@@ -44,7 +44,7 @@ use sc_client_api::{
 	StorageProvider, ProofProvider,
 };
 use parity_scale_codec::{Encode, Decode};
-use finality_grandpa::BlockNumberOps;
+use finality_grandpa::{BlockNumberOps, voter_set::VoterSet};
 use sp_runtime::{
 	Justification, generic::BlockId,
 	traits::{NumberFor, Block as BlockT, Header as HeaderT, One},
@@ -588,7 +588,8 @@ impl<Block: BlockT> ProvableJustification<Block::Header> for GrandpaJustificatio
 		NumberFor<Block>: BlockNumberOps,
 {
 	fn verify(&self, set_id: u64, authorities: &[(AuthorityId, u64)]) -> ClientResult<()> {
-		GrandpaJustification::verify(self, set_id, &authorities.iter().cloned().collect())
+		// WIP: unwrap
+		GrandpaJustification::verify(self, set_id, &VoterSet::new(authorities.iter().cloned()).unwrap())
 	}
 }
 

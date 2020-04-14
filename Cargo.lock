@@ -1373,10 +1373,10 @@ dependencies = [
 
 [[package]]
 name = "finality-grandpa"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "024517816630be5204eba201e8d1d405042b1255a5e0e3f298b054fc24d59e1d"
+version = "0.12.0"
+source = "git+https://github.com/paritytech/finality-grandpa#4c71f4badfda80a3a346e05ce4b76932b72c05d1"
 dependencies = [
+ "either",
  "futures 0.3.4",
  "futures-timer 2.0.2",
  "log",
