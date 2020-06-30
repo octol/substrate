@@ -35,6 +35,7 @@ mod report;
 
 use sc_finality_grandpa::GrandpaJustifications;
 use sp_runtime::traits::Block as BlockT;
+use sp_utils::mpsc::TracingUnboundedReceiver;
 
 use report::{ReportAuthoritySet, ReportVoterState, ReportedRoundStates};
 use notification::JustificationNotification;
@@ -83,19 +84,22 @@ pub trait GrandpaApi<Notification> {
 }
 
 /// Implements the GrandpaApi RPC trait for interacting with GRANDPA.
-pub struct GrandpaRpcHandler<AuthoritySet, VoterState, Block: BlockT> {
+pub struct GrandpaRpcHandler<AuthoritySet, VoterState, JustificationReceiver> {
+// pub struct GrandpaRpcHandler<AuthoritySet, VoterState, Block: BlockT> {
 	authority_set: AuthoritySet,
 	voter_state: VoterState,
-	justification_receiver: GrandpaJustifications<Block>,
+	justification_receiver: JustificationReceiver,
 	manager: SubscriptionManager,
 }
 
-impl<AuthoritySet, VoterState, Block: BlockT> GrandpaRpcHandler<AuthoritySet, VoterState, Block> {
-	/// Creates a new GrandpaRpcHander instance.
+// impl<AuthoritySet, VoterState, Block: BlockT> GrandpaRpcHandler<AuthoritySet, VoterState, Block> {
+impl<AuthoritySet, VoterState, JustificationReceiver> GrandpaRpcHandler<AuthoritySet, VoterState, JustificationReceiver> {
+	/// Creates a new GrandpaRpcHandler instance.
 	pub fn new(
 		authority_set: AuthoritySet,
 		voter_state: VoterState,
-		justification_receiver: GrandpaJustifications<Block>,
+		// justification_receiver: GrandpaJustifications<Block>,
+		justification_receiver: JustificationReceiver,
 		manager: SubscriptionManager,
 	) -> Self {
 		Self {
@@ -107,12 +111,16 @@ impl<AuthoritySet, VoterState, Block: BlockT> GrandpaRpcHandler<AuthoritySet, Vo
 	}
 }
 
-impl<AuthoritySet, VoterState, Block> GrandpaApi<JustificationNotification<Block>>
-	for GrandpaRpcHandler<AuthoritySet, VoterState, Block>
+// impl<AuthoritySet, VoterState, Block> GrandpaApi<JustificationNotification<Block>>
+impl<AuthoritySet, VoterState, JustificationReceiver> GrandpaApi<JustificationReceiver::Notification>
+// impl<AuthoritySet, VoterState, JustT> GrandpaApi<JustificationNotification<Block>>
+	// for GrandpaRpcHandler<AuthoritySet, VoterState, Block>
+	for GrandpaRpcHandler<AuthoritySet, VoterState, JustificationReceiver>
 where
 	VoterState: ReportVoterState + Send + Sync + 'static,
 	AuthoritySet: ReportAuthoritySet + Send + Sync + 'static,
-	Block: BlockT,
+	JustificationReceiver: JustificationReceiverT + Send + Sync + 'static,
+	// Block: BlockT,
 {
 	type Metadata = sc_rpc::Metadata;
 
@@ -125,7 +133,8 @@ where
 	fn subscribe_justifications(
 		&self,
 		_metadata: Self::Metadata,
-		subscriber: Subscriber<JustificationNotification<Block>>
+		// subscriber: Subscriber<JustificationNotification<Block>>
+		subscriber: Subscriber<JustificationReceiver::Notification>
 	) {
 		let stream = self.justification_receiver.subscribe()
 			.map(|x| Ok::<_,()>(JustificationNotification::from(x)))
@@ -149,13 +158,28 @@ where
 	}
 }
 
+pub trait JustificationReceiverT {
+	type Notification;
+
+	fn subscribe(&self) -> sp_utils::mpsc::TracingUnboundedReceiver<Self::Notification>;
+}
+
+impl<Block: BlockT> JustificationReceiverT for GrandpaJustifications<Block> {
+	// type Notification = JustificationNotification<Block>;
+	type Notification = (<Block as BlockT>::Header, sc_finality_grandpa::GrandpaJustification<Block>);
+
+	fn subscribe(&self) -> sp_utils::mpsc::TracingUnboundedReceiver<Self::Notification> {
+		self.subscribe()
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use std::{collections::HashSet, convert::TryInto, sync::Arc};
 	use jsonrpc_core::Output;
 
-	use sc_finality_grandpa::{report, AuthorityId};
+	use sc_finality_grandpa::{report, AuthorityId, GrandpaJustificationSubscribers};
 	use sp_core::crypto::Public;
 	use sc_network_test::Block;
 
@@ -324,5 +348,59 @@ mod tests {
 			),
 			Some(r#"{"jsonrpc":"2.0","result":false,"id":1}"#.into())
 		);
+	}
+
+	fn setup_rpc_handler2<VoterState>(voter_state: VoterState) -> (
+		GrandpaRpcHandler<TestAuthoritySet, VoterState, Block>,
+		GrandpaJustificationSubscribers<Block>
+	) {
+		let (subscribers, justification_receiver) =
+			GrandpaJustifications::channel();
+		let manager = SubscriptionManager::new(Arc::new(sc_rpc::testing::TaskExecutor));
+
+		let handler = GrandpaRpcHandler::new(
+			TestAuthoritySet,
+			voter_state,
+			justification_receiver,
+			manager,
+		);
+		(handler, subscribers)
+	}
+
+	fn setup_io_handler2() -> (
+		sc_rpc::Metadata,
+		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
+		GrandpaJustificationSubscribers<Block>,
+		jsonrpc_core::futures::sync::mpsc::Receiver<String>
+	) {
+		let (handler, subscribers) = setup_rpc_handler2(TestVoterState);
+		let mut io = jsonrpc_core::MetaIoHandler::default();
+		io.extend_with(GrandpaApi::to_delegate(handler));
+
+		let (tx, rx) = jsonrpc_core::futures::sync::mpsc::channel(1);
+		let meta = sc_rpc::Metadata::new(tx);
+		(meta, io, subscribers, rx)
+	}
+
+	#[test]
+	fn submod() {
+		let (
+			meta,
+			io,
+			subscribers,
+			rx
+		) = setup_io_handler2();
+
+		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
+		let resp = io.handle_request_sync(sub_request, meta.clone());
+		dbg!(&resp);
+
+//		// 1. Somehow push some data through the channel using (probably mock) sender
+//
+//		let grandpa_justification = GrandpaJustification;
+//		let justification_notification = (header, grandpa_justification);
+//		subscribers.notify(justification_notification);
+//
+//		// 2. poll rx to make sure we get something on the other side
 	}
 }
