@@ -29,6 +29,155 @@ use sp_finality_grandpa::AuthorityId;
 
 use crate::{Commit, Error};
 
+// ------- BEGIN TEMPORARY PUBSUB TEST SUPPORT -----
+// WIP: naively copied from other tests to create justifications.
+// Once tests are working strip this down to bare minimum required!.
+// -------------------------------------------------
+
+use sp_keyring::Ed25519Keyring;
+use crate::AuthorityList;
+use crate::LinkHalf;
+use parking_lot::Mutex;
+// use sc_network_test::{Block};
+use sc_consensus::LongestChain;
+use sc_network::config::ProtocolConfig;
+use sc_network_test::TestNetFactory;
+// use sp_consensus::import_queue::BlockJustificationImport;
+use sc_block_builder::BlockBuilderProvider;
+
+fn make_ids(keys: &[Ed25519Keyring]) -> AuthorityList {
+	keys.iter().map(|key| key.clone().public().into()).map(|id| (id, 1)).collect()
+}
+
+type PeerData =
+	Mutex<
+		Option<
+			LinkHalf<
+				sc_network_test::Block,
+				sc_network_test::PeersFullClient,
+				LongestChain<substrate_test_runtime_client::Backend, sc_network_test::Block>
+			>
+		>
+	>;
+type GrandpaPeer = sc_network_test::Peer<PeerData>;
+
+struct GrandpaTestNet {
+	peers: Vec<GrandpaPeer>,
+	test_config: TestApi,
+}
+
+impl GrandpaTestNet {
+	fn new(test_config: TestApi, n_peers: usize) -> Self {
+		let mut net = GrandpaTestNet {
+			peers: Vec::with_capacity(n_peers),
+			test_config,
+		};
+		for _ in 0..n_peers {
+			net.add_full_peer();
+		}
+		net
+	}
+}
+
+impl TestNetFactory for GrandpaTestNet {
+	type Verifier = sc_network_test::PassThroughVerifier;
+	type PeerData = PeerData;
+
+	/// Create new test network with peers and given config.
+	fn from_config(_config: &ProtocolConfig) -> Self {
+		GrandpaTestNet {
+			peers: Vec::new(),
+			test_config: Default::default(),
+		}
+	}
+
+	fn make_verifier(
+		&self,
+		_client: sc_network_test::PeersClient,
+		_cfg: &ProtocolConfig,
+		_: &PeerData,
+	) -> Self::Verifier {
+		sc_network_test::PassThroughVerifier(false) // use non-instant finality.
+	}
+
+	fn peer(&mut self, i: usize) -> &mut GrandpaPeer {
+		&mut self.peers[i]
+	}
+
+	fn peers(&self) -> &Vec<GrandpaPeer> {
+		&self.peers
+	}
+
+	fn mut_peers<F: FnOnce(&mut Vec<GrandpaPeer>)>(&mut self, closure: F) {
+		closure(&mut self.peers);
+	}
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct TestApi {
+	genesis_authorities: AuthorityList,
+}
+
+impl TestApi {
+	pub fn new(genesis_authorities: AuthorityList) -> Self {
+		TestApi {
+			genesis_authorities,
+		}
+	}
+}
+
+pub fn test_justifications() -> (sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>, GrandpaJustification<sc_network_test::Block>) {
+	let peers = &[Ed25519Keyring::Alice];
+	let voters = make_ids(peers);
+	let api = TestApi::new(voters);
+	let mut net = GrandpaTestNet::new(api.clone(), 1);
+
+	let client = net.peer(0).client().clone();
+
+	let full_client = client.as_full().expect("only full clients are used in test");
+	let builder = full_client.new_block_at(&BlockId::Number(0), Default::default(), false).unwrap();
+	let block = builder.build().unwrap().block;
+
+	let block_hash = block.hash();
+
+	let justification = {
+		let round = 1;
+		let set_id = 0;
+
+		let precommit = finality_grandpa::Precommit {
+			target_hash: block_hash,
+			target_number: *block.header.number(),
+		};
+
+		let msg = finality_grandpa::Message::Precommit(precommit.clone());
+		let encoded = sp_finality_grandpa::localized_payload(round, set_id, &msg);
+		let signature = peers[0].sign(&encoded[..]).into();
+
+		let precommit = finality_grandpa::SignedPrecommit {
+			precommit,
+			signature,
+			id: peers[0].public().into(),
+		};
+
+		let commit = finality_grandpa::Commit {
+			target_hash: block_hash,
+			target_number: *block.header.number(),
+			precommits: vec![precommit],
+		};
+
+		GrandpaJustification::from_commit(
+			&full_client,
+			round,
+			commit,
+		).unwrap()
+	};
+	let block_header = block.header.clone();
+
+	(block_header, justification)
+}
+
+// ------ END TEMP PUBPUB SUPPORT CODE ---
+
 /// A GRANDPA justification for block finality, it includes a commit message and
 /// an ancestry proof including all headers routing all precommit target blocks
 /// to the commit target block. Due to the current voting strategy the precommit

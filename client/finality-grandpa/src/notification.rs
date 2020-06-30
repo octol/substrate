@@ -43,7 +43,7 @@ type SharedJustificationSubscribers<T> = Arc<Mutex<Vec<JustificationSubscriber<T
 /// at the end of a Grandpa round.
 #[derive(Clone)]
 pub struct GrandpaJustificationSubscribers<Block: BlockT> {
-	subscribers: SharedJustificationSubscribers<Block>
+	pub subscribers: SharedJustificationSubscribers<Block>
 }
 
 impl<Block: BlockT> GrandpaJustificationSubscribers<Block> {
@@ -64,6 +64,10 @@ impl<Block: BlockT> GrandpaJustificationSubscribers<Block> {
 			});
 
 		Ok(())
+	}
+
+	pub fn len(&self) -> usize {
+		self.subscribers.lock().len()
 	}
 }
 

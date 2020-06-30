@@ -155,7 +155,7 @@ mod tests {
 	use std::{collections::HashSet, convert::TryInto, sync::Arc};
 	use jsonrpc_core::Output;
 
-	use sc_finality_grandpa::{report, AuthorityId};
+	use sc_finality_grandpa::{report, AuthorityId, GrandpaJustificationSubscribers};
 	use sp_core::crypto::Public;
 	use sc_network_test::Block;
 
@@ -325,4 +325,74 @@ mod tests {
 			Some(r#"{"jsonrpc":"2.0","result":false,"id":1}"#.into())
 		);
 	}
+
+	// -----------------
+	// WIP: tests for pubsub communication
+	// Tidy me up once it's working!
+	// ---------------
+
+	fn setup_rpc_handler2<VoterState>(voter_state: VoterState) -> (
+		GrandpaRpcHandler<TestAuthoritySet, VoterState, Block>,
+		GrandpaJustificationSubscribers<Block>,
+	) {
+		let (subscribers, justification_receiver) =
+			GrandpaJustifications::channel();
+		let manager = SubscriptionManager::new(Arc::new(sc_rpc::testing::TaskExecutor));
+
+		let handler = GrandpaRpcHandler::new(
+			TestAuthoritySet,
+			voter_state,
+			justification_receiver,
+			manager,
+		);
+		(handler, subscribers)
+	}
+
+	fn setup_io_handler2() -> (
+		sc_rpc::Metadata,
+		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
+		GrandpaJustificationSubscribers<Block>,
+		jsonrpc_core::futures::sync::mpsc::Receiver<String>,
+	) {
+		let (handler, subscribers) = setup_rpc_handler2(TestVoterState);
+		let mut io = jsonrpc_core::MetaIoHandler::default();
+		io.extend_with(GrandpaApi::to_delegate(handler));
+
+		let (tx, rx) = jsonrpc_core::futures::sync::mpsc::channel(1);
+		let meta = sc_rpc::Metadata::new(tx);
+		(meta, io, subscribers, rx)
+	}
+
+	#[test]
+	fn pubsub() {
+		let (
+			meta,
+			io,
+			subscribers,
+			mut metadata_rx
+		) = setup_io_handler2();
+
+		// Here there should be zero subscribers
+		assert!(subscribers.len() == 0);
+
+		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
+		let resp = io.handle_request_sync(sub_request, meta.clone());
+		dbg!(&resp);
+
+		// Now we have one
+		assert!(subscribers.len() == 1);
+
+		// 1. Push a justification through the channel
+		let (block_header, justification) =
+			sc_finality_grandpa::test_justifications();
+		// this should push to all subscribers
+		let s = subscribers.notify((block_header, justification)).unwrap();
+
+		// 2. Poll the receiving end
+		let b = metadata_rx.for_each(|item| {
+			println!("JON");
+			Ok(())
+		}).wait().ok();
+	}
+
 }

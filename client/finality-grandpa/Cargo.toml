@@ -46,6 +46,9 @@ prometheus-endpoint = { package = "substrate-prometheus-endpoint", path = "../..
 sc-block-builder = { version = "0.8.0-rc4", path = "../block-builder" }
 finality-grandpa = { version = "0.12.3", features = ["derive-codec"] }
 pin-project = "0.4.6"
+sp-keyring = { version = "2.0.0-rc4", path = "../../primitives/keyring" }
+substrate-test-runtime-client = { version = "2.0.0-rc4",  path = "../../test-utils/runtime/client" }
+sc-network-test = { version = "0.8.0-rc4", path = "../network/test" }
 
 [dev-dependencies]
 finality-grandpa = { version = "0.12.3", features = ["derive-codec", "test-helpers"] }

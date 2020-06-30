@@ -127,7 +127,7 @@ pub use authorities::SharedAuthoritySet;
 pub use finality_proof::{FinalityProofProvider, StorageAndProofProvider};
 pub use notification::{GrandpaJustificationSubscribers, GrandpaJustifications};
 pub use import::GrandpaBlockImport;
-pub use justification::GrandpaJustification;
+pub use justification::{GrandpaJustification, test_justifications};
 pub use light_import::light_block_import;
 pub use voting_rule::{
 	BeforeBestBlockBy, ThreeQuartersOfTheUnfinalizedChain, VotingRule, VotingRulesBuilder
