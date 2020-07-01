@@ -215,9 +215,11 @@ mod tests {
 	}
 
 	fn setup_rpc_handler<VoterState>(voter_state: VoterState) -> (
-		GrandpaRpcHandler<TestAuthoritySet, VoterState, Block>,
+		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
 		GrandpaJustificationSubscribers<Block>,
-	) {
+	) where
+		VoterState: ReportVoterState + Send + Sync + 'static,
+	{
 		let (subscribers, justification_receiver) =
 			GrandpaJustifications::channel();
 		let manager = SubscriptionManager::new(Arc::new(sc_rpc::testing::TaskExecutor));
@@ -228,14 +230,16 @@ mod tests {
 			justification_receiver,
 			manager,
 		);
-		(handler, subscribers)
+
+		let mut io = jsonrpc_core::MetaIoHandler::default();
+		io.extend_with(GrandpaApi::to_delegate(handler));
+
+		(io, subscribers)
 	}
 
 	#[test]
 	fn uninitialized_rpc_handler() {
-		let (handler, _) = setup_rpc_handler(EmptyVoterState);
-		let mut io = jsonrpc_core::MetaIoHandler::default();
-		io.extend_with(GrandpaApi::to_delegate(handler));
+		let (io, _) = setup_rpc_handler(EmptyVoterState);
 
 		let request = r#"{"jsonrpc":"2.0","method":"grandpa_roundState","params":[],"id":1}"#;
 		let response = r#"{"jsonrpc":"2.0","error":{"code":1,"message":"GRANDPA RPC endpoint not ready"},"id":1}"#;
@@ -246,9 +250,7 @@ mod tests {
 
 	#[test]
 	fn working_rpc_handler() {
-		let (handler, _) = setup_rpc_handler(TestVoterState);
-		let mut io = jsonrpc_core::MetaIoHandler::default();
-		io.extend_with(GrandpaApi::to_delegate(handler));
+		let (io,  _) = setup_rpc_handler(TestVoterState);
 
 		let request = r#"{"jsonrpc":"2.0","method":"grandpa_roundState","params":[],"id":1}"#;
 		let response = "{\"jsonrpc\":\"2.0\",\"result\":{\
@@ -275,9 +277,7 @@ mod tests {
 		GrandpaJustificationSubscribers<Block>,
 		jsonrpc_core::futures::sync::mpsc::Receiver<String>,
 	) {
-		let (handler, subscribers) = setup_rpc_handler(TestVoterState);
-		let mut io = jsonrpc_core::MetaIoHandler::default();
-		io.extend_with(GrandpaApi::to_delegate(handler));
+		let (io, subscribers) = setup_rpc_handler(TestVoterState);
 
 		let (tx, rx) = jsonrpc_core::futures::sync::mpsc::channel(1);
 		let meta = sc_rpc::Metadata::new(tx);
