@@ -214,20 +214,19 @@ mod tests {
 		}
 	}
 
-	fn setup_rpc_handler<VoterState>(voter_state: VoterState) -> (
+	fn setup_io_handler<VoterState>(voter_state: VoterState) -> (
 		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
 		GrandpaJustificationSubscribers<Block>,
 	) where
 		VoterState: ReportVoterState + Send + Sync + 'static,
 	{
-		let (subscribers, justification_receiver) =
-			GrandpaJustifications::channel();
+		let (subscribers, justifications) = GrandpaJustifications::channel();
 		let manager = SubscriptionManager::new(Arc::new(sc_rpc::testing::TaskExecutor));
 
 		let handler = GrandpaRpcHandler::new(
 			TestAuthoritySet,
 			voter_state,
-			justification_receiver,
+			justifications,
 			manager,
 		);
 
@@ -239,7 +238,7 @@ mod tests {
 
 	#[test]
 	fn uninitialized_rpc_handler() {
-		let (io, _) = setup_rpc_handler(EmptyVoterState);
+		let (io, _) = setup_io_handler(EmptyVoterState);
 
 		let request = r#"{"jsonrpc":"2.0","method":"grandpa_roundState","params":[],"id":1}"#;
 		let response = r#"{"jsonrpc":"2.0","error":{"code":1,"message":"GRANDPA RPC endpoint not ready"},"id":1}"#;
@@ -250,7 +249,7 @@ mod tests {
 
 	#[test]
 	fn working_rpc_handler() {
-		let (io,  _) = setup_rpc_handler(TestVoterState);
+		let (io,  _) = setup_io_handler(TestVoterState);
 
 		let request = r#"{"jsonrpc":"2.0","method":"grandpa_roundState","params":[],"id":1}"#;
 		let response = "{\"jsonrpc\":\"2.0\",\"result\":{\
@@ -271,22 +270,16 @@ mod tests {
 		assert_eq!(io.handle_request_sync(request, meta), Some(response.into()));
 	}
 
-	fn setup_io_handler() -> (
-		sc_rpc::Metadata,
-		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
-		GrandpaJustificationSubscribers<Block>,
-		jsonrpc_core::futures::sync::mpsc::Receiver<String>,
-	) {
-		let (io, subscribers) = setup_rpc_handler(TestVoterState);
-
+	fn setup_session() -> (sc_rpc::Metadata, jsonrpc_core::futures::sync::mpsc::Receiver<String>) {
 		let (tx, rx) = jsonrpc_core::futures::sync::mpsc::channel(1);
 		let meta = sc_rpc::Metadata::new(tx);
-		(meta, io, subscribers, rx)
+		(meta, rx)
 	}
 
 	#[test]
 	fn subscribe_and_unsubscribe_to_justifications() {
-		let (meta, io, _, _) = setup_io_handler();
+		let (io, _) = setup_io_handler(TestVoterState);
+		let (meta, _) = setup_session();
 
 		// Subscribe
 		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
@@ -317,7 +310,8 @@ mod tests {
 
 	#[test]
 	fn subscribe_and_unsubscribe_with_wrong_id() {
-		let (meta, io, _, _) = setup_io_handler();
+		let (io, _) = setup_io_handler(TestVoterState);
+		let (meta, _) = setup_session();
 
 		// Subscribe
 		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
@@ -335,34 +329,23 @@ mod tests {
 		);
 	}
 
-	// -----------------
-	// WIP: tests for pubsub communication
-	// Tidy me up once it's working!
-	// ---------------
-
 	#[test]
 	#[ignore]
 	fn subscribe_and_listen_to_one_justification() {
-		let (
-			meta,
-			io,
-			subscribers,
-			metadata_rx
-		) = setup_io_handler();
+		let (io, subscribers) = setup_io_handler(TestVoterState);
+		let (meta, receiver) = setup_session();
 
 		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
 
 		assert!(subscribers.len() == 0);
 		let resp = io.handle_request_sync(sub_request, meta.clone());
 		assert!(subscribers.len() == 1);
-
 		dbg!(&resp);
 
-		let (block_header, justification) =
-			sc_finality_grandpa::test_justifications();
+		let (block_header, justification) = sc_finality_grandpa::test_justifications();
 		let _ = subscribers.notify((block_header, justification)).unwrap();
 
-		let _ = metadata_rx.for_each(|item| {
+		let _ = receiver.for_each(|item| {
 			dbg!(item);
 			Ok(())
 		}).wait().ok();
