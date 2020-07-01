@@ -214,8 +214,12 @@ mod tests {
 		}
 	}
 
-	fn setup_rpc_handler<VoterState>(voter_state: VoterState) -> GrandpaRpcHandler<TestAuthoritySet, VoterState, Block> {
-		let (_, justification_receiver) = GrandpaJustifications::channel();
+	fn setup_rpc_handler<VoterState>(voter_state: VoterState) -> (
+		GrandpaRpcHandler<TestAuthoritySet, VoterState, Block>,
+		GrandpaJustificationSubscribers<Block>,
+	) {
+		let (subscribers, justification_receiver) =
+			GrandpaJustifications::channel();
 		let manager = SubscriptionManager::new(Arc::new(sc_rpc::testing::TaskExecutor));
 
 		let handler = GrandpaRpcHandler::new(
@@ -224,12 +228,12 @@ mod tests {
 			justification_receiver,
 			manager,
 		);
-		handler
+		(handler, subscribers)
 	}
 
 	#[test]
 	fn uninitialized_rpc_handler() {
-		let handler = setup_rpc_handler(EmptyVoterState);
+		let (handler, _) = setup_rpc_handler(EmptyVoterState);
 		let mut io = jsonrpc_core::MetaIoHandler::default();
 		io.extend_with(GrandpaApi::to_delegate(handler));
 
@@ -242,7 +246,7 @@ mod tests {
 
 	#[test]
 	fn working_rpc_handler() {
-		let handler = setup_rpc_handler(TestVoterState);
+		let (handler, _) = setup_rpc_handler(TestVoterState);
 		let mut io = jsonrpc_core::MetaIoHandler::default();
 		io.extend_with(GrandpaApi::to_delegate(handler));
 
@@ -265,19 +269,24 @@ mod tests {
 		assert_eq!(io.handle_request_sync(request, meta), Some(response.into()));
 	}
 
-	fn setup_io_handler() -> (sc_rpc::Metadata, jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>) {
-		let handler = setup_rpc_handler(TestVoterState);
+	fn setup_io_handler() -> (
+		sc_rpc::Metadata,
+		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
+		GrandpaJustificationSubscribers<Block>,
+		jsonrpc_core::futures::sync::mpsc::Receiver<String>,
+	) {
+		let (handler, subscribers) = setup_rpc_handler(TestVoterState);
 		let mut io = jsonrpc_core::MetaIoHandler::default();
 		io.extend_with(GrandpaApi::to_delegate(handler));
 
-		let (tx, _rx) = jsonrpc_core::futures::sync::mpsc::channel(1);
+		let (tx, rx) = jsonrpc_core::futures::sync::mpsc::channel(1);
 		let meta = sc_rpc::Metadata::new(tx);
-		(meta, io)
+		(meta, io, subscribers, rx)
 	}
 
 	#[test]
 	fn subscribe_and_unsubscribe_to_justifications() {
-		let (meta, io) = setup_io_handler();
+		let (meta, io, _, _) = setup_io_handler();
 
 		// Subscribe
 		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
@@ -308,7 +317,7 @@ mod tests {
 
 	#[test]
 	fn subscribe_and_unsubscribe_with_wrong_id() {
-		let (meta, io) = setup_io_handler();
+		let (meta, io, _, _) = setup_io_handler();
 
 		// Subscribe
 		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
@@ -331,66 +340,30 @@ mod tests {
 	// Tidy me up once it's working!
 	// ---------------
 
-	fn setup_rpc_handler2<VoterState>(voter_state: VoterState) -> (
-		GrandpaRpcHandler<TestAuthoritySet, VoterState, Block>,
-		GrandpaJustificationSubscribers<Block>,
-	) {
-		let (subscribers, justification_receiver) =
-			GrandpaJustifications::channel();
-		let manager = SubscriptionManager::new(Arc::new(sc_rpc::testing::TaskExecutor));
-
-		let handler = GrandpaRpcHandler::new(
-			TestAuthoritySet,
-			voter_state,
-			justification_receiver,
-			manager,
-		);
-		(handler, subscribers)
-	}
-
-	fn setup_io_handler2() -> (
-		sc_rpc::Metadata,
-		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
-		GrandpaJustificationSubscribers<Block>,
-		jsonrpc_core::futures::sync::mpsc::Receiver<String>,
-	) {
-		let (handler, subscribers) = setup_rpc_handler2(TestVoterState);
-		let mut io = jsonrpc_core::MetaIoHandler::default();
-		io.extend_with(GrandpaApi::to_delegate(handler));
-
-		let (tx, rx) = jsonrpc_core::futures::sync::mpsc::channel(1);
-		let meta = sc_rpc::Metadata::new(tx);
-		(meta, io, subscribers, rx)
-	}
-
 	#[test]
-	fn pubsub() {
+	#[ignore]
+	fn subscribe_and_listen_to_one_justification() {
 		let (
 			meta,
 			io,
 			subscribers,
-			mut metadata_rx
-		) = setup_io_handler2();
-
-		// Here there should be zero subscribers
-		assert!(subscribers.len() == 0);
+			metadata_rx
+		) = setup_io_handler();
 
 		let sub_request = r#"{"jsonrpc":"2.0","method":"grandpa_subscribeJustifications","params":[],"id":1}"#;
-		let resp = io.handle_request_sync(sub_request, meta.clone());
-		dbg!(&resp);
 
-		// Now we have one
+		assert!(subscribers.len() == 0);
+		let resp = io.handle_request_sync(sub_request, meta.clone());
 		assert!(subscribers.len() == 1);
 
-		// 1. Push a justification through the channel
+		dbg!(&resp);
+
 		let (block_header, justification) =
 			sc_finality_grandpa::test_justifications();
-		// this should push to all subscribers
-		let s = subscribers.notify((block_header, justification)).unwrap();
+		let _ = subscribers.notify((block_header, justification)).unwrap();
 
-		// 2. Poll the receiving end
-		let b = metadata_rx.for_each(|item| {
-			println!("JON");
+		let _ = metadata_rx.for_each(|item| {
+			dbg!(item);
 			Ok(())
 		}).wait().ok();
 	}
