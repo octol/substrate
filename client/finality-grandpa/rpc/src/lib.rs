@@ -342,7 +342,7 @@ mod tests {
 		assert!(subscribers.len() == 1);
 		dbg!(&resp);
 
-		let (block_header, justification) = sc_finality_grandpa::test_justifications();
+		let (block_header, justification) = sc_finality_grandpa::test_justification();
 		let _ = subscribers.notify((block_header, justification)).unwrap();
 
 		let _ = receiver.for_each(|item| {

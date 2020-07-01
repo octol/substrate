@@ -35,19 +35,12 @@ use crate::{Commit, Error};
 // -------------------------------------------------
 
 use sp_keyring::Ed25519Keyring;
-use crate::AuthorityList;
 use crate::LinkHalf;
 use parking_lot::Mutex;
-// use sc_network_test::{Block};
 use sc_consensus::LongestChain;
 use sc_network::config::ProtocolConfig;
 use sc_network_test::TestNetFactory;
-// use sp_consensus::import_queue::BlockJustificationImport;
 use sc_block_builder::BlockBuilderProvider;
-
-fn make_ids(keys: &[Ed25519Keyring]) -> AuthorityList {
-	keys.iter().map(|key| key.clone().public().into()).map(|id| (id, 1)).collect()
-}
 
 type PeerData =
 	Mutex<
@@ -63,14 +56,12 @@ type GrandpaPeer = sc_network_test::Peer<PeerData>;
 
 struct GrandpaTestNet {
 	peers: Vec<GrandpaPeer>,
-	test_config: TestApi,
 }
 
 impl GrandpaTestNet {
-	fn new(test_config: TestApi, n_peers: usize) -> Self {
+	fn new(n_peers: usize) -> Self {
 		let mut net = GrandpaTestNet {
 			peers: Vec::with_capacity(n_peers),
-			test_config,
 		};
 		for _ in 0..n_peers {
 			net.add_full_peer();
@@ -87,7 +78,6 @@ impl TestNetFactory for GrandpaTestNet {
 	fn from_config(_config: &ProtocolConfig) -> Self {
 		GrandpaTestNet {
 			peers: Vec::new(),
-			test_config: Default::default(),
 		}
 	}
 
@@ -113,24 +103,10 @@ impl TestNetFactory for GrandpaTestNet {
 	}
 }
 
-#[derive(Default, Clone)]
-pub(crate) struct TestApi {
-	genesis_authorities: AuthorityList,
-}
-
-impl TestApi {
-	pub fn new(genesis_authorities: AuthorityList) -> Self {
-		TestApi {
-			genesis_authorities,
-		}
-	}
-}
-
-pub fn test_justifications() -> (sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>, GrandpaJustification<sc_network_test::Block>) {
+/// Return a Header and Justification for use in tests
+pub fn test_justification() -> (sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>, GrandpaJustification<sc_network_test::Block>) {
 	let peers = &[Ed25519Keyring::Alice];
-	let voters = make_ids(peers);
-	let api = TestApi::new(voters);
-	let mut net = GrandpaTestNet::new(api.clone(), 1);
+	let mut net = GrandpaTestNet::new(1);
 
 	let client = net.peer(0).client().clone();
 
