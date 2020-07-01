@@ -35,86 +35,41 @@ use crate::{Commit, Error};
 // -------------------------------------------------
 
 use sp_keyring::Ed25519Keyring;
-use crate::LinkHalf;
-use parking_lot::Mutex;
-use sc_consensus::LongestChain;
 use sc_network::config::ProtocolConfig;
 use sc_network_test::TestNetFactory;
 use sc_block_builder::BlockBuilderProvider;
-
-type PeerData =
-	Mutex<
-		Option<
-			LinkHalf<
-				sc_network_test::Block,
-				sc_network_test::PeersFullClient,
-				LongestChain<substrate_test_runtime_client::Backend, sc_network_test::Block>
-			>
-		>
-	>;
-type GrandpaPeer = sc_network_test::Peer<PeerData>;
-
-struct GrandpaTestNet {
-	peers: Vec<GrandpaPeer>,
-}
-
-impl GrandpaTestNet {
-	fn new(n_peers: usize) -> Self {
-		let mut net = GrandpaTestNet {
-			peers: Vec::with_capacity(n_peers),
-		};
-		for _ in 0..n_peers {
-			net.add_full_peer();
-		}
-		net
-	}
-}
-
-impl TestNetFactory for GrandpaTestNet {
-	type Verifier = sc_network_test::PassThroughVerifier;
-	type PeerData = PeerData;
-
-	/// Create new test network with peers and given config.
-	fn from_config(_config: &ProtocolConfig) -> Self {
-		GrandpaTestNet {
-			peers: Vec::new(),
-		}
-	}
-
-	fn make_verifier(
-		&self,
-		_client: sc_network_test::PeersClient,
-		_cfg: &ProtocolConfig,
-		_: &PeerData,
-	) -> Self::Verifier {
-		sc_network_test::PassThroughVerifier(false) // use non-instant finality.
-	}
-
-	fn peer(&mut self, i: usize) -> &mut GrandpaPeer {
-		&mut self.peers[i]
-	}
-
-	fn peers(&self) -> &Vec<GrandpaPeer> {
-		&self.peers
-	}
-
-	fn mut_peers<F: FnOnce(&mut Vec<GrandpaPeer>)>(&mut self, closure: F) {
-		closure(&mut self.peers);
-	}
-}
+// use substrate_test_runtime_client::{TestClientBuilder, DefaultTestClientBuilderExt};
+	use substrate_test_runtime_client::{
+		runtime::Block,
+		Backend,
+		DefaultTestClientBuilderExt,
+		TestClient,
+		TestClientBuilderExt,
+		TestClientBuilder,
+	};
 
 /// Return a Header and Justification for use in tests
 pub fn test_justification() -> (sp_runtime::generic::Header<u64, sp_runtime::traits::BlakeTwo256>, GrandpaJustification<sc_network_test::Block>) {
 	let peers = &[Ed25519Keyring::Alice];
-	let mut net = GrandpaTestNet::new(1);
 
-	let client = net.peer(0).client().clone();
+	let builder = substrate_test_runtime_client::TestClientBuilder::new();
+	let backend = builder.backend();
+	let client = builder.build();
+	let client = Arc::new(client);
 
-	let full_client = client.as_full().expect("only full clients are used in test");
-	let builder = full_client.new_block_at(&BlockId::Number(0), Default::default(), false).unwrap();
-	let block = builder.build().unwrap().block;
+	let built_block = sc_block_builder::BlockBuilder::new(
+		&*client,
+		client.info().best_hash,
+		client.info().best_number,
+		sp_consensus::RecordProof::Yes,
+		Default::default(),
+		&*backend,
+	).unwrap().build().unwrap();
 
+
+	let block = built_block.block;
 	let block_hash = block.hash();
+	let block_header = block.header.clone();
 
 	let justification = {
 		let round = 1;
@@ -142,12 +97,11 @@ pub fn test_justification() -> (sp_runtime::generic::Header<u64, sp_runtime::tra
 		};
 
 		GrandpaJustification::from_commit(
-			&full_client,
+			&client,
 			round,
 			commit,
 		).unwrap()
 	};
-	let block_header = block.header.clone();
 
 	(block_header, justification)
 }
