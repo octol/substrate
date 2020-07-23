@@ -229,6 +229,7 @@ mod tests {
 	fn setup_io_handler<VoterState>(voter_state: VoterState) -> (
 		jsonrpc_core::MetaIoHandler<sc_rpc::Metadata>,
 		GrandpaJustificationSubscribers<Block>,
+		SubscriptionManager,
 	) where
 		VoterState: ReportVoterState + Send + Sync + 'static,
 	{
@@ -239,18 +240,18 @@ mod tests {
 			TestAuthoritySet,
 			voter_state,
 			justifications,
-			manager,
+			manager.clone(),
 		);
 
 		let mut io = jsonrpc_core::MetaIoHandler::default();
 		io.extend_with(GrandpaApi::to_delegate(handler));
 
-		(io, subscribers)
+		(io, subscribers, manager)
 	}
 
 	#[test]
 	fn uninitialized_rpc_handler() {
-		let (io, _) = setup_io_handler(EmptyVoterState);
+		let (io, _, _) = setup_io_handler(EmptyVoterState);
 
 		let request = r#"{"jsonrpc":"2.0","method":"grandpa_roundState","params":[],"id":1}"#;
 		let response = r#"{"jsonrpc":"2.0","error":{"code":1,"message":"GRANDPA RPC endpoint not ready"},"id":1}"#;
@@ -261,7 +262,7 @@ mod tests {
 
 	#[test]
 	fn working_rpc_handler() {
-		let (io,  _) = setup_io_handler(TestVoterState);
+		let (io,  _, _) = setup_io_handler(TestVoterState);
 
 		let request = r#"{"jsonrpc":"2.0","method":"grandpa_roundState","params":[],"id":1}"#;
 		let response = "{\"jsonrpc\":\"2.0\",\"result\":{\
@@ -290,7 +291,7 @@ mod tests {
 
 	#[test]
 	fn subscribe_and_unsubscribe_to_justifications() {
-		let (io, _) = setup_io_handler(TestVoterState);
+		let (io, _, _) = setup_io_handler(TestVoterState);
 		let (meta, _) = setup_session();
 
 		// Subscribe
@@ -322,7 +323,7 @@ mod tests {
 
 	#[test]
 	fn subscribe_and_unsubscribe_with_wrong_id() {
-		let (io, _) = setup_io_handler(TestVoterState);
+		let (io, _, _) = setup_io_handler(TestVoterState);
 		let (meta, _) = setup_session();
 
 		// Subscribe
@@ -395,7 +396,7 @@ mod tests {
 
 	#[test]
 	fn subscribe_and_listen_to_one_justification() {
-		let (io, subscribers) = setup_io_handler(TestVoterState);
+		let (io, subscribers, manager) = setup_io_handler(TestVoterState);
 		let (meta, receiver) = setup_session();
 
 		// Subscribe
@@ -410,9 +411,11 @@ mod tests {
 		let (block_header, justification) = create_justification();
 		let _ = subscribers.notify((block_header.clone(), justification.clone())).unwrap();
 
+		let (recv, receiver) = receiver.into_future().wait().unwrap();
+		let recv = recv.unwrap();
+
 		// Inspect what we received
-		let recv = receiver.take(1).wait().flatten().collect::<Vec<_>>();
-		let recv: Notification = serde_json::from_str(&recv[0]).unwrap();
+		let recv: Notification = serde_json::from_str(&recv).unwrap();
 		let mut json_map = match recv.params {
 			Params::Map(json_map) => json_map,
 			_ => panic!(),
@@ -431,5 +434,27 @@ mod tests {
 		assert_eq!(recv_sub_id, sub_id);
 		assert_eq!(recv_block_header, block_header);
 		assert_eq!(recv_justification, justification);
+
+		// Unsubscribe
+		let unsub_req = format!(
+			"{{\"jsonrpc\":\"2.0\",\"method\":\"grandpa_unsubscribeJustifications\",\"params\":[\"{}\"],\"id\":1}}",
+			sub_id
+		);
+		assert_eq!(
+			io.handle_request_sync(&unsub_req, meta.clone()),
+			Some(r#"{"jsonrpc":"2.0","result":true,"id":1}"#.into()),
+		);
+
+		// Send again
+		let (block_header, justification) = create_justification();
+		let _ = subscribers.notify((block_header.clone(), justification.clone())).unwrap();
+
+		// WIP: trying to poll the receiver and check that nothings is received.
+		// Problem: we don't have a task. Can we use the executor?
+		let executor = manager.executor();
+
+		use futures::{TryFuture, compat::Compat};
+		let future = receiver.into_future();
+		let res = executor.execute(Box::new(future.map(|_| Ok(()))));
 	}
 }
