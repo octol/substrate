@@ -181,6 +181,15 @@ pub mod pallet {
 				_ => {},
 			}
 		}
+
+		fn on_runtime_upgrade() -> Weight {
+			log::info!("JON: pallet-grandpa: on_runtime_upgrade()");
+
+			log::info!("storage_version: {}", <Pallet<T> as GetPalletVersion>::storage_version().unwrap().major);
+			log::info!("storage_version: {}", <Pallet<T> as GetPalletVersion>::storage_version().unwrap().minor);
+			log::info!("storage_version: {}", <Pallet<T> as GetPalletVersion>::storage_version().unwrap().patch);
+			0
+		}
 	}
 
 	#[pallet::call]
